@@ -1,0 +1,359 @@
+import net.neoforged.moddevgradle.internal.RunGameTask
+import com.github.jengelman.gradle.plugins.shadow.relocation.SimpleRelocator
+
+buildscript {
+	repositories {
+		maven {
+			name 'Beanification'
+			url 'https://maven.tamaized.com/releases/'
+		}
+	}
+	dependencies {
+		classpath "tamaized:beanification:${beanification_version}:gradle"
+	}
+}
+
+plugins {
+	id 'java-library'
+	id 'eclipse'
+	id 'idea'
+	id 'maven-publish'
+	// Version List: https://projects.neoforged.net/neoforged/ModDevGradle
+	id 'net.neoforged.moddev' version "${mdg_version}"
+	id "com.dorongold.task-tree" version "4.0.0"
+	id 'com.gradleup.shadow' version "${shadowjar_version}"
+}
+
+apply plugin: 'tamaized.beanification'
+
+repositories {
+	gradlePluginPortal()
+}
+
+dependencies { // Forces intellij to grab sources for the gradle build script
+	compileOnly "com.gradleup.shadow:shadow-gradle-plugin:${shadowjar_version}"
+	compileOnly "net.neoforged.moddev:net.neoforged.moddev.gradle.plugin:${mdg_version}"
+}
+
+wrapper {
+	gradleVersion = '9.1.0'
+	distributionType = Wrapper.DistributionType.ALL
+}
+
+configurations {
+	shade
+}
+
+shadowJar {
+	mustRunAfter jar
+	archiveClassifier.set('')
+	from tasks.named('jarJar')
+	configurations = [project.configurations.shade]
+	relocate(new SimpleRelocator('tamaized', 'tamaized.cmdhs')) {
+		exclude 'tamaized.cmdhs.**'
+	}
+}
+
+def secrets = new Properties()
+def secretsFile = file('secrets.properties')
+if (secretsFile.exists()) {
+	secretsFile.withInputStream {
+		stream -> secrets.load(stream)
+	}
+
+	fileTree("secrets").matching {
+		include "**/*.properties"
+	}.each {
+		File file ->
+			file.withInputStream {
+				stream -> secrets.load(stream)
+			}
+	}
+}
+
+idea {
+	module {
+		downloadJavadoc = true
+		downloadSources = true
+	}
+}
+
+version = "${project.minecraft_version}-${project.mod_major_version}." + (hasProperty("CIVersion") ? CIVersion : mod_version)
+group = "tamaized.${project.mod_id}"
+
+base {
+	archivesName = "CmdHistorySearch"
+}
+
+subprojects {
+	version = project(":").version
+}
+
+java {
+	toolchain {
+		languageVersion.set(JavaLanguageVersion.of(25))
+	}
+}
+
+tasks.withType(JavaCompile).configureEach {
+	options.compilerArgs << "-Xlint:all,-classfile,-processing,-deprecation,-this-escape" << "-Werror"
+	options.encoding = 'UTF-8'
+}
+
+sourceSets {
+	data {
+		compileClasspath += main.compileClasspath + main.output
+
+		java {
+			srcDirs = ['src/main/java', 'src/data/java']
+		}
+		resources {
+			srcDirs = ['src/main/resources']
+		}
+	}
+	dataForPublishing {
+		compileClasspath += data.compileClasspath
+
+		java {
+			srcDirs = ['src/data/java']
+		}
+	}
+}
+
+configurations {
+	dataImplementation.extendsFrom implementation
+}
+
+neoForge {
+	evaluationDependsOnChildren()
+
+	def mod_id = project.mod_id
+	version = project.neoforge_version
+
+	validateAccessTransformers = true
+
+	addModdingDependenciesTo sourceSets.data
+
+	mods {
+		"${mod_id}" {
+			it.sourceSet this.sourceSets.main
+		}
+
+		"${mod_id}-data" {
+			it.sourceSet this.sourceSets.main
+			it.sourceSet this.sourceSets.data
+		}
+
+		'asm' {
+			it.sourceSet project(":asm").sourceSets.main
+		}
+	}
+
+	def mainMod = mods."${project.mod_id}"
+	def dataMod = mods."${project.mod_id}-data"
+	def asmMod = mods."asm"
+
+	unitTest {
+		enable()
+		testedMod = mainMod
+		loadedMods = [mainMod]
+	}
+
+	runs {
+		configureEach {
+			gameDirectory = project.file('run')
+			systemProperty 'forge.logging.console.level', 'debug'
+			logLevel = org.slf4j.event.Level.DEBUG
+			loadedMods = [mainMod, asmMod]
+		}
+
+		client {
+			client()
+			systemProperty 'forge.enabledGameTestNamespaces', mod_id
+			programArguments.addAll(
+				'--username', secrets.getProperty("username") ?: 'Dev',
+				'--accessToken', '0',
+				secrets.getProperty("uuid") ? '--uuid' : '', secrets.getProperty("uuid") ?: ''
+			)
+		}
+
+		server {
+			server()
+			systemProperty 'forge.enabledGameTestNamespaces', mod_id
+			programArgument '--nogui'
+		}
+
+		data {
+			clientData()
+			gameDirectory = project.file('run-data')
+			programArguments.addAll(
+				'--mod', mod_id,
+				'--all',
+				'--output', file('src/generated/resources/').getAbsolutePath(),
+				'--existing', file('src/main/resources/').getAbsolutePath()
+			)
+			sourceSet = this.sourceSets.data
+			loadedMods = [dataMod, asmMod]
+		}
+	}
+}
+
+afterEvaluate {
+	tasks.withType(RunGameTask).configureEach {
+		classpathProvider.setFrom(classpathProvider.files.stream().filter(f -> !f.toString().contains('/asm/build/')).toList())
+	}
+}
+
+def gprUser = hasProperty("GPRUser") ? GPRUser : secrets.getProperty("gpr.user")
+def gprKey = hasProperty("GPRKey") ? GPRKey : secrets.getProperty("gpr.key")
+
+repositories {
+	mavenLocal()
+	maven {
+		name 'Jared\'s Maven' // JEI
+		url 'https://maven.blamejared.com/'
+	}
+	maven {
+		name 'Tama\'s Maven'
+		url 'https://maven.tamaized.com/releases/'
+	}
+}
+
+dependencies {
+	jarJar implementation(project(":asm"))
+
+	runtimeOnly "mezz.jei:jei-${project.minecraft_version}-neoforge:${project.jei_version}"
+
+	def beanification = "tamaized:beanification:${project.beanification_version}"
+	implementation beanification
+	shade beanification
+	testImplementation "${beanification}:tests"
+	testCompileOnly "${beanification}:test-sources"
+
+	implementation "tamaized:pkginfoutil:${project.pkginfoutil_version}"
+
+	testImplementation "net.neoforged:testframework:${project.neoforge_version}"
+	testImplementation "org.junit.jupiter:junit-jupiter:6.0.1"
+	testRuntimeOnly "org.junit.jupiter:junit-jupiter-engine:6.0.1"
+	testRuntimeOnly "org.junit.platform:junit-platform-launcher:6.0.1"
+	testImplementation "org.mockito:mockito-junit-jupiter:5.21.0"
+}
+
+configurations.testImplementation {
+	exclude group: 'cmdhs', module: 'asm'
+}
+
+test {
+	useJUnitPlatform()
+	testLogging {
+		events "failed"
+
+		showExceptions true
+		exceptionFormat "full"
+		showCauses true
+		showStackTraces true
+
+		showStandardStreams = false
+	}
+}
+
+sourceSets.main.resources {
+	srcDir 'src/generated/resources'
+	exclude '.cache'
+}
+
+processResources {
+	def ver = project.version
+	filesMatching("META-INF/neoforge.mods.toml") {
+		expand([
+			'file': [
+				'jarVersion': ver
+			]
+		])
+	}
+}
+
+jar {
+	manifest {
+		attributes([
+			"Specification-Title"     : "CmdHistorySearch",
+			"Specification-Vendor"    : "Tamaized",
+			"Specification-Version"   : "${version}",
+			"Implementation-Title"    : project.name,
+			"Implementation-Version"  : "${version}",
+			"Implementation-Vendor"   : "Tamaized",
+			"Implementation-Timestamp": new Date().format("yyyy-MM-dd'T'HH:mm:ssZ")
+		])
+	}
+}
+
+def mavenUser = hasProperty("CIMUser") ? CIMUser : secrets.getProperty("maven_username")
+def mavenToken = hasProperty("CIMToken") ? CIMToken : secrets.getProperty("maven_password")
+
+publishing {
+	publications {
+		create('mavenJava', MavenPublication) {
+			afterEvaluate {
+				artifact this.project.jar
+				artifact this.project.sourceJar
+				artifact this.project.dataJar
+				artifact this.project.dataSourceJar
+			}
+			groupId 'tamaized'
+			artifactId this.project.mod_id
+
+			def depsProvider = this.project.provider {
+				[
+					beanification_version: this.project.beanification_version,
+					pkginfoutil_version: this.project.pkginfoutil_version
+				]
+			}
+
+			pom.withXml {
+				def dependenciesNode = asNode().appendNode('dependencies')
+
+				def addDep = { String group, String name, String version ->
+					def depNode = dependenciesNode.appendNode('dependency')
+					depNode.appendNode('groupId', group)
+					depNode.appendNode('artifactId', name)
+					depNode.appendNode('version', version)
+					depNode.appendNode('scope', 'compile')
+				}
+
+				def deps = depsProvider.get()
+
+				addDep('tamaized', 'beanification', deps.beanification_version)
+				addDep('tamaized', 'pkginfoutil', deps.pkginfoutil_version)
+			}
+		}
+	}
+	repositories {
+		maven {
+			url "https://maven.tamaized.com/releases"
+			credentials {
+				username mavenUser
+				password mavenToken
+			}
+		}
+	}
+}
+
+tasks.register('sourceJar', Jar) {
+	dependsOn 'classes'
+	from sourceSets.main.allSource
+	archiveClassifier = 'sources'
+}
+
+tasks.register('dataJar', Jar) {
+	dependsOn 'classes'
+	from sourceSets.dataForPublishing.output
+	archiveClassifier = 'data'
+}
+
+tasks.register('dataSourceJar', Jar) {
+	dependsOn 'classes'
+	from sourceSets.dataForPublishing.allSource
+	archiveClassifier = 'data-sources'
+}
+
+build.dependsOn shadowJar
