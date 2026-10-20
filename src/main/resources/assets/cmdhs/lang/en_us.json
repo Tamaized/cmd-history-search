@@ -1,0 +1,10 @@
+{
+  "key.category.cmdhs.history_search": "Chat History Search",
+  "key.cmdhs.search_reverse": "Search History Backward",
+  "key.cmdhs.search_forward": "Search History Forward",
+  "key.cmdhs.search_abort": "Cancel History Search",
+  "gui.cmdhs.search_reverse": "(reverse-i-search)`%s'",
+  "gui.cmdhs.search_reverse_failed": "(failed reverse-i-search)`%s'",
+  "gui.cmdhs.search_forward": "(i-search)`%s'",
+  "gui.cmdhs.search_forward_failed": "(failed i-search)`%s'"
+}

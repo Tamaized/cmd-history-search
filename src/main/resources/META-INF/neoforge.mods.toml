@@ -12,7 +12,7 @@ description='''
 
 '''
 
-[[dependencies.voidscape]]
+[[dependencies.cmdhs]]
     modId="neoforge"
     type="required"
     versionRange="[26.1.2,)"

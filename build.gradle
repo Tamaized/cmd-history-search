@@ -164,7 +164,8 @@ neoForge {
 			gameDirectory = project.file('run')
 			systemProperty 'forge.logging.console.level', 'debug'
 			logLevel = org.slf4j.event.Level.DEBUG
-			loadedMods = [mainMod, asmMod]
+			// loadedMods = [mainMod, asmMod]
+			loadedMods = [mainMod]
 		}
 
 		client {
